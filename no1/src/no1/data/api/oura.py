@@ -1,7 +1,7 @@
 import sqlite3
 import os
 import json
-import requests
+import httpx  # Replaced requests with httpx
 import pandas as pd
 import toga
 from toga.style import Pack
@@ -39,50 +39,19 @@ def prompt_for_api_key(main_window):
     input_window.content = input_box
     input_window.show()
 
-def initialize_oura_db():
-    # Ensure the db folder exists
-    if not db_exists("oura_data"):
-        print(DB_PATH)
-        print("***")
-        print(get_db_path('oura_data'))
-        print("***")
-        # os.makedirs(os.path.dirname(get_db_path('oura_data')))
-
-    # Connect to the SQLite database
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    # Create a table to store Oura data (adjust columns as needed)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS oura_data (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            day TEXT,
-            activity_score INTEGER,
-            readiness_score INTEGER,
-            sleep_score INTEGER,
-            spo2_score INTEGER,
-            stress_score INTEGER,
-            -- Add more fields as per your API data structure
-            UNIQUE(day)  -- Ensure no duplicate entries for the same day
-        )
-    ''')
-
-    conn.commit()
-    conn.close()
-
-def pull_oura_data(access_token, start_date='1970-01-01',end_date=None, endpoint='all'):
+def pull_oura_data(access_token, start_date='1970-01-01', end_date=None, endpoint='all'):
     """
-    Pull Oura Ring Data
+    Pull Oura Ring Data using httpx
     """
-
-    if end_date == None:
-        end_date = datetime.today().strftime('%Y-%d-%m')
-        
+    
+    if end_date is None:
+        end_date = datetime.today().strftime('%Y-%m-%d')
+    
     headers = {
-    'Authorization': f'Bearer {access_token}',
+        'Authorization': f'Bearer {access_token}',
     }
     
-    daily_endpoints =[
+    daily_endpoints = [
         "daily_activity",
         "daily_readiness",
         "daily_resilience",
@@ -91,67 +60,52 @@ def pull_oura_data(access_token, start_date='1970-01-01',end_date=None, endpoint
         "daily_stress",
         "sleep",
         "sleep_time",
-    ] 
+    ]
 
-    # check endpoint values
-    if type(endpoint) == str:
+    # Check endpoint values
+    if isinstance(endpoint, str):
         if endpoint == 'all':
             endpoints = daily_endpoints
         else:
-            endpoints = list(endpoint)
-    elif type(endpoint) != list:
-        raise Exception("Endpoint needs to be str or list")
-    else:
+            endpoints = [endpoint]
+    elif isinstance(endpoint, list):
         endpoints = endpoint
-        
-    for e in endpoints:
-        if e not in daily_endpoints:
-            raise Exception(f"Unknown Endpoint '{endpoint}'")
+    else:
+        raise Exception("Endpoint needs to be str or list")
     
     params = {
         'start_date': start_date,  
         'end_date': end_date      
     }
 
-    # data_dict = dict()
+    # Initialize the DataFrame
     oura_pd = None
-    oura_sleep_pd = None
 
-    for e in endpoints:
-        print(e)
-        endpoint = f'https://api.ouraring.com/v2/usercollection/{e}'
-        response = requests.get(endpoint, headers=headers, params=params)
-        # Check the response
-        if response.status_code == 200:
-            payload = response.json()
+    with httpx.Client() as client:  # Using httpx instead of requests
+        for e in endpoints:
+            print(f"Fetching data for {e}")
+            url = f'https://api.ouraring.com/v2/usercollection/{e}'
+            response = client.get(url, headers=headers, params=params)
 
-            for entry in payload['data']:
-                flat_entry = pd.json_normalize(entry).dropna(axis=1, how='all')
-                # for col in flat_entry.columns:
-                #     print(col,": ",flat_entry[col])
-                # break
-                
-                if oura_pd is None:
-                    oura_pd = flat_entry
-                    continue
-                day = entry['day']
+            if response.status_code == 200:
+                payload = response.json()
 
-                if e == 'sleep':
-                    continue
-                    # if oura_sleep_pd is None:
-                    #     oura_sleep_pd = flat_entry
-                    #     continue
-                    # else:
-                    #     oura_sleep_pd = pd.concat([oura_sleep_pd,flat_entry], ignore_index=True)
+                for entry in payload['data']:
+                    flat_entry = pd.json_normalize(entry).dropna(axis=1, how='all')
 
-                if oura_pd['day'].isin([day]).any():
-                    oura_pd.loc[oura_pd['day'] == day, flat_entry.columns] = flat_entry.values
-                else:
-                    oura_pd = pd.concat([oura_pd,flat_entry], ignore_index=True)
-        else:
-            print(f'Error: {response.status_code}, Message: {response.text}')
+                    if oura_pd is None:
+                        oura_pd = flat_entry
+                        continue
 
-    # Convert the list columns to JSON strings
+                    day = entry['day']
+                    if oura_pd['day'].isin([day]).any():
+                        oura_pd.loc[oura_pd['day'] == day, flat_entry.columns] = flat_entry.values
+                    else:
+                        oura_pd = pd.concat([oura_pd, flat_entry], ignore_index=True)
+            else:
+                print(f'Error: {response.status_code}, Message: {response.text}')
+
+    # Convert the list columns to JSON strings before saving to the database
     def convert_lists_to_json(df):
         for col in df.columns:
             if df[col].apply(lambda x: isinstance(x, list)).any():  # Check if column contains lists
@@ -159,9 +113,13 @@ def pull_oura_data(access_token, start_date='1970-01-01',end_date=None, endpoint
         return df
 
     # Convert list columns to JSON
-    oura_pd = convert_lists_to_json(oura_pd)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    oura_pd.to_sql(DB_PATH, conn, if_exists='append', index=False)
+    if oura_pd is not None:
+        oura_pd = convert_lists_to_json(oura_pd)
+
+        # Save the DataFrame to SQLite
+        conn = sqlite3.connect(DB_PATH)
+        oura_pd.to_sql('oura_data', conn, if_exists='append', index=False)
+        conn.commit()
+        conn.close()
 
     return True

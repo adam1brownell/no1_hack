@@ -28,7 +28,7 @@ class HelloWorldApp(toga.App):
 
     def nav_main(self, widget):
         # Load the main page
-        main_page(self.main_window, self.nav_back)
+        main_page(self.main_window, self.nav_main)
 
     def nav_back(self, widget):
         # Return to the first page (landing page)
