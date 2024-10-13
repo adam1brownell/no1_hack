@@ -1,13 +1,15 @@
 import sqlite3
+import os
+import json
 import requests
 import pandas as pd
 import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, CENTER
 from datetime import datetime
-import os
+from no1.data.helpers import db_exists, get_db_path
 
-db_path = os.path.join(os.path.dirname(__file__), 'db', 'oura.db')
+DB_PATH = get_db_path('oura_data')
 
 def prompt_for_api_key(main_window):
     # Create a small window to ask for API key input
@@ -39,11 +41,15 @@ def prompt_for_api_key(main_window):
 
 def initialize_oura_db():
     # Ensure the db folder exists
-    if not os.path.exists(os.path.dirname(db_path)):
-        os.makedirs(os.path.dirname(db_path))
+    if not db_exists("oura_data"):
+        print(DB_PATH)
+        print("***")
+        print(get_db_path('oura_data'))
+        print("***")
+        # os.makedirs(os.path.dirname(get_db_path('oura_data')))
 
     # Connect to the SQLite database
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     # Create a table to store Oura data (adjust columns as needed)
@@ -107,13 +113,10 @@ def pull_oura_data(access_token, start_date='1970-01-01',end_date=None, endpoint
         'end_date': end_date      
     }
 
-    # Initialize database connection
-    initialize_oura_db()
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
     # data_dict = dict()
     oura_pd = None
+    oura_sleep_pd = None
+
     for e in endpoints:
         print(e)
         endpoint = f'https://api.ouraring.com/v2/usercollection/{e}'
@@ -123,12 +126,23 @@ def pull_oura_data(access_token, start_date='1970-01-01',end_date=None, endpoint
             payload = response.json()
 
             for entry in payload['data']:
-                flat_entry = pd.json_normalize(entry)
+                flat_entry = pd.json_normalize(entry).dropna(axis=1, how='all')
+                # for col in flat_entry.columns:
+                #     print(col,": ",flat_entry[col])
+                # break
                 
                 if oura_pd is None:
                     oura_pd = flat_entry
                     continue
                 day = entry['day']
+
+                if e == 'sleep':
+                    continue
+                    # if oura_sleep_pd is None:
+                    #     oura_sleep_pd = flat_entry
+                    #     continue
+                    # else:
+                    #     oura_sleep_pd = pd.concat([oura_sleep_pd,flat_entry], ignore_index=True)
 
                 if oura_pd['day'].isin([day]).any():
                     oura_pd.loc[oura_pd['day'] == day, flat_entry.columns] = flat_entry.values
@@ -137,4 +151,17 @@ def pull_oura_data(access_token, start_date='1970-01-01',end_date=None, endpoint
         else:
             print(f'Error: {response.status_code}, Message: {response.text}')
 
-    return(oura_pd)
+    # Convert the list columns to JSON strings
+    def convert_lists_to_json(df):
+        for col in df.columns:
+            if df[col].apply(lambda x: isinstance(x, list)).any():  # Check if column contains lists
+                df[col] = df[col].apply(json.dumps)  # Convert lists to JSON strings
+        return df
+
+    # Convert list columns to JSON
+    oura_pd = convert_lists_to_json(oura_pd)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    oura_pd.to_sql(DB_PATH, conn, if_exists='append', index=False)
+
+    return True

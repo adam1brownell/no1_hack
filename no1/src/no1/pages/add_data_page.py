@@ -4,26 +4,27 @@ from toga.style import Pack
 from toga.style.pack import COLUMN, CENTER, RIGHT, BOTTOM, ROW
 from no1.data.state.global_state import is_saved, save_state, get_state
 import no1.data.api.oura as oura
+from no1.data.helpers import db_exists, get_db_path
 
 DATA_SOURCES = {
     "Oura": {
         "name": "Oura",
-        "is_connected": False,
+        "is_connected": db_exists("oura_data"),
         "image_ref": "assets/oura-logo.jpg"
     },
     "Apple Healthkit": {
         "name": "Apple Healthkit",
-        "is_connected": False,
+        "is_connected": db_exists("garmin_data"),
         "image_ref": "assets/apple-logo.jpg"
     },
     "Whoop": {
         "name": "Whoop",
-        "is_connected": False,
+        "is_connected": db_exists("whoop_data"),
         "image_ref": "assets/whoop-logo.jpg"
     },
     "Garmin": {
         "name": "Garmin",
-        "is_connected": False,
+        "is_connected": db_exists("garmin_data"),
         "image_ref": "assets/garmin-logo.jpg"
     },
 }
@@ -82,9 +83,10 @@ def add_data_page(main_window, go_back):
     def connect_source(main_window, source):
         if source['name'] == "Oura":
             oura.prompt_for_api_key(main_window)
+            source['is_connected'] = db_exists("oura_data")
         else:
             print("Other")
-        source['is_connected'] = True
+            source['is_connected'] = True
         add_data_page(main_window, go_back)  # Close the overlay by going back to the add data page
 
     def disconnect_source(source):
